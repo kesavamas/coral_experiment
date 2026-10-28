@@ -29,6 +29,7 @@ from models.common import (
     C3,
     C3SPP,
     C3TR,
+    MAFFN,
     SPP,
     SPPF,
     Bottleneck,
@@ -48,7 +49,6 @@ from models.common import (
     GhostBottleneck,
     GhostConv,
     Proto,
-    MAFFN,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
@@ -434,10 +434,9 @@ def parse_model(d, ch):
             c2 = sum(ch[x] for x in f)
         # TODO: channel, gw, gd
         elif m is MAFFN:
-           pass
-           c1 = [ch[x] for x in f]
-           c2 = make_divisible(args[0] * gw, ch_mul)
-           args = [c1, c2, *args[1:]]
+            c1 = [ch[x] for x in f]
+            c2 = make_divisible(args[0] * gw, ch_mul)
+            args = [c1, c2, *args[1:]]
         elif m in {Detect, Segment}:
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
