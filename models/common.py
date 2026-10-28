@@ -1139,9 +1139,9 @@ class Classify(nn.Module):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
 
+
 class MAFFN(nn.Module):
-    """
-    Multi-scale Attention Feature Fusion Network adapted for YOLOv5.
+    """Multi-scale Attention Feature Fusion Network adapted for YOLOv5.
 
     Inputs:
         xs: [P3, P4, P5] feature maps from the YOLOv5 neck.
@@ -1159,12 +1159,11 @@ class MAFFN(nn.Module):
           generators are Caffe-specific, so this is a PyTorch architectural
           adaptation of its concepts, not a line-by-line port.
     """
+
     def __init__(self, channels, out_channels, num_dense_layers=3, reduction=4):
         super().__init__()
         if not isinstance(channels, (list, tuple)) or len(channels) != 3:
-            raise ValueError(
-                f"MAFFN expects three input channel counts [P3, P4, P5], got {channels}"
-            )
+            raise ValueError(f"MAFFN expects three input channel counts [P3, P4, P5], got {channels}")
         if num_dense_layers < 1:
             raise ValueError("num_dense_layers must be >= 1")
 
@@ -1172,26 +1171,30 @@ class MAFFN(nn.Module):
         self.num_scales = len(channels)
 
         # Transform each pyramid level to a shared channel dimension.
-        self.transform = nn.ModuleList([
-            nn.Sequential(
-                Conv(c, out_channels, 1, 1),
-                Conv(out_channels, out_channels, 3, 1, g=1),
-            )
-            for c in channels
-        ])
+        self.transform = nn.ModuleList(
+            [
+                nn.Sequential(
+                    Conv(c, out_channels, 1, 1),
+                    Conv(out_channels, out_channels, 3, 1, g=1),
+                )
+                for c in channels
+            ]
+        )
 
         # Predict one attention logit map per scale. Softmax across scales
         # makes the three weights sum to 1 at every spatial location.
         hidden = max(out_channels // reduction, 16)
-        self.attention = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(out_channels, hidden, kernel_size=1, bias=False),
-                nn.BatchNorm2d(hidden),
-                nn.SiLU(inplace=True),
-                nn.Conv2d(hidden, 1, kernel_size=1, bias=True),
-            )
-            for _ in channels
-        ])
+        self.attention = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(out_channels, hidden, kernel_size=1, bias=False),
+                    nn.BatchNorm2d(hidden),
+                    nn.SiLU(inplace=True),
+                    nn.Conv2d(hidden, 1, kernel_size=1, bias=True),
+                )
+                for _ in channels
+            ]
+        )
 
         # Dense refinement: every layer sees the original fused feature plus
         # all growth features produced by earlier layers.
@@ -1221,9 +1224,7 @@ class MAFFN(nn.Module):
         for x, layer in zip(xs, self.transform):
             x = layer(x)
             if x.shape[-2:] != target_size:
-                x = nn.functional.interpolate(
-                    x, size=target_size, mode="nearest"
-                )
+                x = nn.functional.interpolate(x, size=target_size, mode="nearest")
             transformed.append(x)
 
         logits = torch.stack(
@@ -1233,7 +1234,7 @@ class MAFFN(nn.Module):
         weights = torch.softmax(logits, dim=1)
 
         stacked = torch.stack(transformed, dim=1)  # [B, scales, C, H, W]
-        fused = (stacked * weights).sum(dim=1)     # [B, C, H, W]
+        fused = (stacked * weights).sum(dim=1)  # [B, C, H, W]
 
         dense_features = [fused]
         for layer in self.dense_layers:
