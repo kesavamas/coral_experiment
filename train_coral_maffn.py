@@ -6,6 +6,7 @@ import argparse
 import subprocess
 import sys
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="C:\\Users\\kesavaMas\\program\\python\\yolov5-master\\coral\\data.yaml")
@@ -19,18 +20,27 @@ def main():
     args = parser.parse_args()
 
     cmd = [
-        sys.executable, "train.py",
-        "--data", args.data,
-        "--weights", args.weights,
-        "--cfg", args.cfg,
-        "--epochs", str(args.epochs),
-        "--img", str(args.img),
-        "--batch-size", str(args.batch_size),
-        "--name", args.name,
+        sys.executable,
+        "train.py",
+        "--data",
+        args.data,
+        "--weights",
+        args.weights,
+        "--cfg",
+        args.cfg,
+        "--epochs",
+        str(args.epochs),
+        "--img",
+        str(args.img),
+        "--batch-size",
+        str(args.batch_size),
+        "--name",
+        args.name,
     ]
     if args.device:
         cmd += ["--device", args.device]
     subprocess.run(cmd, check=True)
+
 
 if __name__ == "__main__":
     main()
