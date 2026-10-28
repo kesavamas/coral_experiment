@@ -1139,106 +1139,37 @@ class Classify(nn.Module):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
 
-class MAFFN(nn.Module):
-    """
-    Multi-scale Attention Feature Fusion Network adapted for YOLOv5.
 
-    Inputs:
-        xs: [P3, P4, P5] feature maps from the YOLOv5 neck.
-            Their spatial sizes differ, and their channel counts may differ.
-
-    Output:
-        One fused feature map at the spatial resolution of the middle input (P4).
-
-    Adaptation notes:
-        - Transformation: each scale is projected to a shared channel dimension.
-        - Dense fusion: successive dense blocks consume the concatenation of
-          the original fused tensor and all preceding growth features.
-        - Attention: per-pixel softmax weights are computed across scales.
-        - The original Caffe implementation's exact tensor layout and layer
-          generators are Caffe-specific, so this is a PyTorch architectural
-          adaptation of its concepts, not a line-by-line port.
-    """
-    def __init__(self, channels, out_channels, num_dense_layers=3, reduction=4):
+class _CBS(nn.Module):
+    def __init__(self, c1, c2, k=3, d=1):
         super().__init__()
-        if not isinstance(channels, (list, tuple)) or len(channels) != 3:
-            raise ValueError(
-                f"MAFFN expects three input channel counts [P3, P4, P5], got {channels}"
-            )
-        if num_dense_layers < 1:
-            raise ValueError("num_dense_layers must be >= 1")
+        self.conv = nn.Conv2d(c1, c2, k, 1, d * (k // 2), dilation=d, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU()
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
 
-        self.out_channels = out_channels
-        self.num_scales = len(channels)
+class MAFFN(nn.Module):
+    # Multi-scale Attention Feature Fusion: args YAML = [c2, k]
+    def __init__(self, c1, c2, k=5, dilations=(1, 2, 3, 4)):
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = _CBS(c1, c_, 1)
+        self.branches = nn.ModuleList([_CBS(c_, c_, 3, d) for d in dilations])
+        s = len(dilations) + 1                      # +1 untuk fitur asli
+        self.att = nn.Sequential(                   # mirip FC 64->32->S di kode asli
+            nn.Linear(s * c_, 64), nn.ReLU(inplace=True),
+            nn.Linear(64, 32), nn.ReLU(inplace=True),
+            nn.Linear(32, s))
+        self.cv2 = _CBS(c_, c2, 1)
 
-        # Transform each pyramid level to a shared channel dimension.
-        self.transform = nn.ModuleList([
-            nn.Sequential(
-                Conv(c, out_channels, 1, 1),
-                Conv(out_channels, out_channels, 3, 1, g=1),
-            )
-            for c in channels
-        ])
-
-        # Predict one attention logit map per scale. Softmax across scales
-        # makes the three weights sum to 1 at every spatial location.
-        hidden = max(out_channels // reduction, 16)
-        self.attention = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(out_channels, hidden, kernel_size=1, bias=False),
-                nn.BatchNorm2d(hidden),
-                nn.SiLU(inplace=True),
-                nn.Conv2d(hidden, 1, kernel_size=1, bias=True),
-            )
-            for _ in channels
-        ])
-
-        # Dense refinement: every layer sees the original fused feature plus
-        # all growth features produced by earlier layers.
-        growth = max(out_channels // 4, 16)
-        self.dense_layers = nn.ModuleList()
-        dense_channels = out_channels
-        for _ in range(num_dense_layers):
-            self.dense_layers.append(
-                nn.Sequential(
-                    Conv(dense_channels, growth, 3, 1),
-                    Conv(growth, growth, 3, 1),
-                )
-            )
-            dense_channels += growth
-
-        self.output = Conv(dense_channels, out_channels, 1, 1)
-        self.shortcut = Conv(channels[1], out_channels, 1, 1) if channels[1] != out_channels else nn.Identity()
-
-    def forward(self, xs):
-        if not isinstance(xs, (list, tuple)) or len(xs) != 3:
-            raise ValueError("MAFFN forward expects [P3, P4, P5] feature maps")
-
-        # P4 is the target resolution so the fused output can replace the
-        # P4 feature used by the detector head.
-        target_size = xs[1].shape[-2:]
-        transformed = []
-        for x, layer in zip(xs, self.transform):
-            x = layer(x)
-            if x.shape[-2:] != target_size:
-                x = nn.functional.interpolate(
-                    x, size=target_size, mode="nearest"
-                )
-            transformed.append(x)
-
-        logits = torch.stack(
-            [attn(x) for attn, x in zip(self.attention, transformed)],
-            dim=1,
-        )  # [B, scales, 1, H, W]
-        weights = torch.softmax(logits, dim=1)
-
-        stacked = torch.stack(transformed, dim=1)  # [B, scales, C, H, W]
-        fused = (stacked * weights).sum(dim=1)     # [B, C, H, W]
-
-        dense_features = [fused]
-        for layer in self.dense_layers:
-            dense_features.append(layer(torch.cat(dense_features, dim=1)))
-
-        refined = self.output(torch.cat(dense_features, dim=1))
-        residual = self.shortcut(xs[1])
-        return refined + residual
+    def forward(self, x):
+        x = self.cv1(x)
+        feats = [x]
+        for b in self.branches:
+            feats.append(b(feats[-1]))              # skala berurutan seperti dense
+        stack = torch.stack(feats, 1)               # (B, S, C, H, W)
+        desc = stack.mean((3, 4)).flatten(1)        # (B, S*C)
+        w = torch.softmax(self.att(desc), dim=1)    # bobot antar skala
+        out = (stack * w[:, :, None, None, None]).sum(1)
+        return self.cv2(out)
