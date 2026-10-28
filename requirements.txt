@@ -3,7 +3,7 @@
 
 # Base ------------------------------------------------------------------------
 matplotlib>=3.3
-numpy>=1.23.5
+numpy>=2.2.6
 opencv-python>=4.6.0
 pillow>=10.3.0
 psutil  # system resources
